@@ -13,6 +13,20 @@ conn = sqlite3.connect('./db/data.db', isolation_level=None)
 cur = conn.cursor()
 
 
+def get_address(latitude, longitude):
+    '''
+        緯度・経度から住所を取得する
+    '''
+    res = requests.get(
+        f'https://geoapi.heartrails.com/api/json?method=searchByGeoLocation&x={longitude}&y={latitude}'
+    ).json()
+
+    prefecture = res['response']['location'][0]['prefecture']
+    city = res['response']['location'][0]['city']
+
+    return prefecture, city
+
+
 def get(url):
     '''
         指定されたURLのページを取得する
@@ -33,27 +47,39 @@ def set_links(links):
         )
 
 
-def set_marker(id, name, latitude, longitude, scale, link):
+def set_castle(id, name, latitude, longitude, prefecture, area, city, html, link):
     '''
         マーカーをDBに登録する
     '''
     cur.execute('BEGIN')
-    cur.execute(
-        'INSERT OR IGNORE INTO markers(key, name, latitude, longitude, scale, link) VALUES (:key, :name, :latitude, :longitude, :scale, :link)',
-        {
+    try:
+        sql = '''
+            INSERT OR IGNORE INTO castles(
+                key, name, latitude, longitude, prefecture, area, city, html, link
+            ) VALUES (
+                :key, :name, :latitude, :longitude, :prefecture, :area, :city, :html, :link
+            )
+        '''
+        values = {
             'key': f'{name}_{latitude}_{longitude}',
             'name': name,
             'latitude': latitude,
             'longitude': longitude,
-            'scale': scale,
+            'prefecture': prefecture,
+            'area': area,
+            'city': city,
+            'html': html,
             'link': link
         }
-    )
-    cur.execute(
-        'UPDATE links SET visited = 1 WHERE id = :id',
-        {'id': id}
-    )
-    cur.execute('COMMIT')
+        cur.execute(sql, values)
+        cur.execute(
+            'UPDATE links SET visited = 1 WHERE id = :id',
+            {'id': id}
+        )
+        cur.execute('COMMIT')
+    except Exception as e:
+        print(e)
+        cur.execute('ROLLBACK')
 
 
 def get_pref_links():
@@ -89,20 +115,27 @@ def get_castle_info(castle_link):
     res = get(castle_link)
     soup = BeautifulSoup(res.text, "html.parser")
 
+    # 城名・地域
     name_selector = 'body > div.header > p.title-mid > ruby > rb'
-    options_selector = 'body > div.det select > option > option > option > option > option > option'
-
     name = soup.select(name_selector)[0].text \
         .split(' ')[-1] \
         .split('(')[0]
-    map_url = soup.select(options_selector)[0].attrs['value']
+    area = soup.select(name_selector)[0].text.split(' ')[0]
 
-    match = re.search(r'q=([\d.]+),([\d.]+)', map_url)
+    # 緯度・経度
+    options_selector = 'body > div.det select option[value^="https://maps.google.com/"]'
+    map_url = soup.select(options_selector)[-1].attrs['value']
+    match = re.search(r'q=(\d+\.\d+),(\d+\.\d+)', map_url)
     latitude = float(match.group(1))
     longitude = float(match.group(2))
 
-    scale = 5
-    return name, latitude, longitude, scale
+    # 都道府県, 市区町村
+    prefecture, city = get_address(latitude, longitude)
+
+    # HTML
+    html = res.text.replace('\n', '')
+
+    return name, latitude, longitude, prefecture, area, city, html
 
 
 def castle_links():
@@ -124,19 +157,21 @@ def castle_info():
         print("-" * 20)
         print(c[1])
         castle_info = get_castle_info(c[1])
-        print(castle_info)
-        set_marker(
+        set_castle(
             c[0],
-            castle_info[0],
-            castle_info[1],
-            castle_info[2],
-            castle_info[3],
+            *castle_info,
             c[1]
         )
 
 
+def init_castle():
+    cur.execute('DELETE FROM castles')
+    cur.execute('UPDATE links SET visited = 0')
+    cur.execute('DELETE FROM castles')
+
+
 def test():
-    pass
+    get_castle_info('https://www.hb.pei.jp/shiro/echigo/kakizaki-jyo/')
 
 
 if __name__ == '__main__':
@@ -146,5 +181,7 @@ if __name__ == '__main__':
         castle_links()
     elif '--castle-info' in sys.argv:
         castle_info()
+    elif '--init-castle' in sys.argv:
+        init_castle()
 
     conn.close()
