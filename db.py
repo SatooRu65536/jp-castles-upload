@@ -16,6 +16,7 @@ cur.execute('''
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         key TEXT UNIQUE NOT NULL,
         name TEXT NOT NULL,
+        scale INTEGER NOT NULL DEFAULT 1,
         latitude REAL NOT NULL,
         longitude REAL NOT NULL,
         prefecture TEXT NOT NULL,
